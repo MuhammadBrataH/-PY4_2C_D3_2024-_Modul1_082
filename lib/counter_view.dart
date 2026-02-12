@@ -10,6 +10,35 @@ class CounterView extends StatefulWidget {
 class _CounterViewState extends State<CounterView> {
   final CounterController _controller = CounterController();
 
+  void _confirmReset() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text("Konfirmasi Reset"),
+          content: const Text("Apakah Anda yakin ingin mereset counter?"),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(); // Tutup dialog
+              },
+              child: const Text("Batal"),
+            ),
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  _controller.reset();
+                });
+                Navigator.of(context).pop(); // Tutup dialog
+              },
+              child: const Text("Ya"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -27,13 +56,7 @@ class _CounterViewState extends State<CounterView> {
           backgroundColor: const Color.fromARGB(255, 77, 80, 255),
       ),
       body: Column(
-        children: [
-          Expanded(
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
+            children: [
                   Padding(
                     padding: const EdgeInsets.all(8.0),
                     child: const Text(
@@ -89,7 +112,7 @@ class _CounterViewState extends State<CounterView> {
                   ),
                   const SizedBox(height: 20),
                   FilledButton.tonal(
-                    onPressed: () => setState(() => _controller.reset()),
+                    onPressed: () => _confirmReset(),
                     child: const Text("Reset Counter"),
                     style: FilledButton.styleFrom(backgroundColor: Colors.grey),
                   ),
@@ -98,25 +121,40 @@ class _CounterViewState extends State<CounterView> {
                     "Riwayat Perubahan:",
                     style: TextStyle(fontSize: 18),
                   ),
-                  SizedBox(
-                    height: 100,
-                    child: ListView.builder(
+                  Expanded(
+                    child:  ListView.builder(
                       itemCount: _controller.history.length,
                       itemBuilder: (context, index) {
-                        return Text(
-                          _controller.history.reversed.toList()[index],
-                          style: const TextStyle(fontSize: 14),
-                          textAlign: TextAlign.center,
-                        );
+
+                         final item = _controller.history.reversed.toList()[index];
+
+                         Color cardColor;
+                         IconData iconData;
+                          if (item.startsWith('Incremented')) {
+                            cardColor = Colors.greenAccent;
+                            iconData = Icons.add;
+                          } else if (item.startsWith('Decremented')) {
+                            cardColor = Colors.redAccent;
+                            iconData = Icons.remove;
+                          } else {
+                            cardColor = Colors.grey;
+                            iconData = Icons.refresh;
+                          }
+
+                          return Card(
+                            color: cardColor,
+                            child: ListTile(
+                              leading: Icon(iconData),
+                              title: Text(item),
+                            ),
+                          );
+
+                         
                       },
                     ),
                   ),
                 ],
               ),
-            ),
-          ),
-        ],
-      ),
     );
   }
-}
+}           

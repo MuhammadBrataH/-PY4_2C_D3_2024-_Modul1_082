@@ -1,17 +1,13 @@
-# logbook_app_001
+## Self-Reflection: Prinsip SRP dan Fitur History Logger
 
-A new Flutter project.
+Bagaimana prinsip SRP membantu saat menambah fitur History Logger?
 
-## Getting Started
+Dengan menerapkan prinsip SRP, kode terpisah menjadi:
+- Counter_Controller -> bertanggung jawab di logika bisnis (hitung, reset, riwayat)
+- Counter_View -> bertanggung jawab di tampilan UI
 
-This project is a starting point for a Flutter application.
+Saat menambahkan fitur History Logger, saya hanya perlu menambahkan atribut `_history` dan logika pencatatan riwayat di `CounterController` tanpa perlu mengubah struktur UI. 
 
-A few resources to get you started if this is your first Flutter project:
+Di bagian View, saya cukup menambahkan widget `ListView.builder` untuk menampilkan data history yang sudah disediakan oleh Controller.
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
-# -PY4_2C_D3_2024-_Modul1_082
+Jika semua kode dicampur jadi satu file, menambah fitur baru akan lebih sulit karena harus memilah mana logika dan mana tampilan. SRP membuat kode lebih mudah dipahami, diubah, dan diperbaiki.
