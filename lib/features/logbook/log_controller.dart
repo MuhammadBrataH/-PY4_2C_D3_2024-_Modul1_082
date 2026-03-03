@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'models/log_model.dart';
+import '../models/log_model.dart';
+import 'package:logbook_app_082/services/mongo_service.dart';
+import 'package:logbook_app_082/helpers/log_helper.dart';
 
 // ===== LSP: Superclass Abstrak =====
 // LSP = Liskov Substitution Principle
@@ -34,14 +36,24 @@ class TaskLog extends BaseLog {
   TaskLog({required this.title, required this.description});
 }
 
-// ===== Controller: Mengelola data (CRUD + Persistence) =====
+// ===== Controller: Mengelola data (CRUD + Cloud Sync) =====
 class LogController {
   // ValueNotifier = "kotak data" yang BERTERIAK ke semua pendengarnya saat isinya berubah
   // Jadi UI tidak perlu setState() manual — cukup dengarkan notifier ini
   final ValueNotifier<List<LogModel>> logsNotifier = ValueNotifier([]);
 
-  // Key untuk SharedPreferences (seperti label pada laci penyimpanan)
+  // ===== BARU: Notifier status loading untuk UI =====
+  // true = sedang mengambil data dari cloud, false = selesai
+  final ValueNotifier<bool> isLoadingNotifier = ValueNotifier(false);
+
+  // Key untuk SharedPreferences (cache lokal / fallback offline)
   static const String _storageKey = 'user_logs_data';
+
+  // ===== BARU: Instance MongoService (Singleton) =====
+  // Ini "jembatan" antara Controller dan Cloud Database
+  final MongoService _mongoService = MongoService();
+
+  final String _source = "log_controller.dart";
 
   List<LogModel> _allLogs =
       []; // List utama untuk menyimpan semua catatan (tanpa filter)
@@ -49,9 +61,9 @@ class LogController {
   String _currentSearchKeyword = ''; // Kata kunci pencarian saat ini
 
   // Constructor — dipanggil saat LogController pertama kali dibuat
-  // Langsung load data dari disk agar catatan lama muncul
+  // Langsung load data dari CLOUD agar catatan terbaru muncul
   LogController() {
-    loadFromDisk();
+    loadFromCloud();
   }
 
   void searchLogs(String keyword) {
@@ -73,10 +85,13 @@ class LogController {
     searchLogs(_currentSearchKeyword);
   }
 
-  // ===== CREATE: Tambah catatan baru =====
-  void addLog(String title, String desc, {String category = 'Pribadi'}) {
+  // ===== CREATE: Tambah catatan baru + Sync ke Cloud =====
+  Future<void> addLog(
+    String title,
+    String desc, {
+    String category = 'Pribadi',
+  }) async {
     // Buat object LogModel baru
-    // DateTime.now().toString() → contoh: "2026-02-24 14:30:00.000"
     final newLog = LogModel(
       title: title,
       description: desc,
@@ -84,62 +99,175 @@ class LogController {
       category: category,
     );
 
-    _allLogs.add(newLog); // Simpan ke list utama
-    _refreshDisplay(); // Refresh tampilan berdasarkan kata kunci saat ini
-    saveToDisk(); // Simpan ke storage setiap ada perubahan
+    // 1. Simpan ke list lokal & refresh UI (agar responsif)
+    _allLogs.add(newLog);
+    _refreshDisplay();
+    saveToDisk(); // Cache lokal
+
+    // 2. Sync ke Cloud (MongoDB Atlas)
+    try {
+      await _mongoService.insertLog(newLog);
+      await LogHelper.writeLog(
+        "SYNC: '${newLog.title}' berhasil disimpan ke Cloud",
+        source: _source,
+        level: 2,
+      );
+      // Reload dari cloud untuk mendapatkan data dengan _id dari MongoDB
+      await _reloadFromCloud();
+    } catch (e) {
+      await LogHelper.writeLog(
+        "SYNC: Gagal simpan ke Cloud - $e (data tersimpan lokal)",
+        source: _source,
+        level: 1,
+      );
+    }
   }
 
-  // ===== UPDATE: Edit catatan berdasarkan index =====
-  void updateLog(
+  // ===== UPDATE: Edit catatan + Sync ke Cloud =====
+  Future<void> updateLog(
     int displayIndex,
     String title,
     String desc, {
     String category = 'Pribadi',
-  }) {
+  }) async {
     final displayedLog = logsNotifier.value[displayIndex];
     final actualIndex = _allLogs.indexOf(displayedLog);
 
     if (actualIndex != -1) {
-      _allLogs[actualIndex] = LogModel(
+      // Buat LogModel baru dengan ID yang SAMA (agar MongoDB tahu yang mana)
+      final updatedLog = LogModel(
+        id: _allLogs[actualIndex].id, // Pertahankan ID dari cloud
         title: title,
         description: desc,
         date: DateTime.now().toString(),
         category: category,
       );
+
+      // 1. Update lokal & refresh UI
+      _allLogs[actualIndex] = updatedLog;
       _refreshDisplay();
       saveToDisk();
+
+      // 2. Sync ke Cloud
+      try {
+        await _mongoService.updateLog(updatedLog);
+        await LogHelper.writeLog(
+          "SYNC: '${updatedLog.title}' berhasil diupdate di Cloud",
+          source: _source,
+          level: 2,
+        );
+      } catch (e) {
+        await LogHelper.writeLog(
+          "SYNC: Gagal update ke Cloud - $e (data terupdate lokal)",
+          source: _source,
+          level: 1,
+        );
+      }
     }
   }
 
-  // ===== DELETE: Hapus catatan berdasarkan index =====
-  void removeLog(int displayIndex) {
+  // ===== DELETE: Hapus catatan + Sync ke Cloud =====
+  Future<void> removeLog(int displayIndex) async {
     final displayedLog = logsNotifier.value[displayIndex];
+    final removedId = displayedLog.id; // Ambil ID sebelum dihapus
+
+    // 1. Hapus lokal & refresh UI
     _allLogs.remove(displayedLog);
     _refreshDisplay();
     saveToDisk();
+
+    // 2. Sync ke Cloud (hapus berdasarkan ObjectId)
+    if (removedId != null) {
+      try {
+        await _mongoService.deleteLog(removedId);
+        await LogHelper.writeLog(
+          "SYNC: '${displayedLog.title}' berhasil dihapus dari Cloud",
+          source: _source,
+          level: 2,
+        );
+      } catch (e) {
+        await LogHelper.writeLog(
+          "SYNC: Gagal hapus dari Cloud - $e (data terhapus lokal)",
+          source: _source,
+          level: 1,
+        );
+      }
+    }
   }
 
-  // ===== SAVE: Encoding Object → JSON → SharedPreferences =====
-  // Future = operasi yang butuh waktu (async), hasilnya datang nanti
-  // async/await = "tunggu sampai operasi ini selesai"
-  // ===== SAVE =====
+  // ===== LOAD FROM CLOUD: Sumber data utama =====
+  // Dipanggil saat pertama kali app dibuka
+  // Jika cloud gagal, fallback ke cache lokal (SharedPreferences)
+  Future<void> loadFromCloud() async {
+    isLoadingNotifier.value = true;
+
+    try {
+      await LogHelper.writeLog(
+        "SYNC: Memuat data dari Cloud...",
+        source: _source,
+        level: 3,
+      );
+
+      // Ambil semua data dari MongoDB Atlas
+      final cloudLogs = await _mongoService.getLogs();
+
+      _allLogs = cloudLogs;
+      _refreshDisplay();
+
+      // Simpan ke cache lokal sebagai backup
+      saveToDisk();
+
+      await LogHelper.writeLog(
+        "SYNC: ${cloudLogs.length} catatan berhasil dimuat dari Cloud",
+        source: _source,
+        level: 2,
+      );
+    } catch (e) {
+      // Jika cloud gagal, pakai data lokal sebagai fallback
+      await LogHelper.writeLog(
+        "SYNC: Cloud gagal, memuat dari cache lokal - $e",
+        source: _source,
+        level: 1,
+      );
+      await loadFromDisk();
+    } finally {
+      isLoadingNotifier.value = false;
+    }
+  }
+
+  // ===== RELOAD: Refresh data dari cloud tanpa loading indicator =====
+  // Dipanggil setelah insert untuk mendapatkan _id dari MongoDB
+  Future<void> _reloadFromCloud() async {
+    try {
+      final cloudLogs = await _mongoService.getLogs();
+      _allLogs = cloudLogs;
+      _refreshDisplay();
+      saveToDisk();
+    } catch (e) {
+      await LogHelper.writeLog(
+        "SYNC: Reload gagal - $e",
+        source: _source,
+        level: 1,
+      );
+    }
+  }
+
+  // ===== SAVE TO DISK: Cache lokal (SharedPreferences) =====
   Future<void> saveToDisk() async {
     final prefs = await SharedPreferences.getInstance();
-    // Simpan _allLogs (list LENGKAP), bukan logsNotifier (yang mungkin terfilter)
     final String encodedData = jsonEncode(
       _allLogs.map((e) => e.toMap()).toList(),
     );
     await prefs.setString(_storageKey, encodedData);
   }
 
-  // ===== LOAD =====
+  // ===== LOAD FROM DISK: Fallback offline =====
   Future<void> loadFromDisk() async {
     final prefs = await SharedPreferences.getInstance();
     final String? data = prefs.getString(_storageKey);
     if (data != null) {
       final List decoded = jsonDecode(data);
       _allLogs = decoded.map((e) => LogModel.fromMap(e)).toList();
-      // Tampilkan semua catatan saat pertama kali load
       logsNotifier.value = List.from(_allLogs);
     }
   }
