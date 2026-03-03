@@ -12,17 +12,58 @@ class LogView extends StatefulWidget {
 }
 
 class _LogViewState extends State<LogView> {
-  // Controller untuk logika bisnis (CRUD + storage)
   final LogController _controller = LogController();
-
-  // TextEditingController untuk menangkap input dari TextField
-  // Ini terpisah dari LogController — fungsinya berbeda
-  // _titleController = mengambil teks dari field judul
-  // _contentController = mengambil teks dari field deskripsi
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _contentController = TextEditingController();
 
-  // ===== Greeting berdasarkan waktu =====
+  // ===== BARU: Controller untuk search field =====
+  final TextEditingController _searchController = TextEditingController();
+
+  // ===== BARU: Daftar kategori yang tersedia =====
+  final List<String> _categories = ['Pribadi', 'Himpunan', 'Akademik'];
+
+  // ===== BARU: Helper — Warna berdasarkan kategori =====
+  // Fungsi ini mengembalikan warna yang BERBEDA untuk setiap kategori
+  // Dipakai untuk mewarnai Card agar mudah dibedakan secara visual
+  Color _getCategoryColor(String category) {
+    switch (category) {
+      case 'Himpunan':
+        return Colors.blue.shade50; // Biru muda
+      case 'Akademik':
+        return Colors.red.shade50; // Merah muda
+      case 'Pribadi':
+      default:
+        return Colors.green.shade50; // Hijau muda
+    }
+  }
+
+  // ===== BARU: Helper — Icon berdasarkan kategori =====
+  // Memberikan icon yang relevan dengan jenis kategori
+  IconData _getCategoryIcon(String category) {
+    switch (category) {
+      case 'Himpunan':
+        return Icons.group_rounded;
+      case 'Akademik':
+        return Icons.school_rounded;
+      case 'Pribadi':
+      default:
+        return Icons.person_rounded;
+    }
+  }
+
+  // ===== BARU: Helper — Warna icon berdasarkan kategori =====
+  Color _getCategoryIconColor(String category) {
+    switch (category) {
+      case 'Himpunan':
+        return Colors.blue;
+      case 'Akademik':
+        return Colors.red;
+      case 'Pribadi':
+      default:
+        return Colors.green;
+    }
+  }
+
   String _getGreeting() {
     int jam = DateTime.now().hour;
     if (jam >= 6 && jam < 11) return "Selamat Pagi";
@@ -31,110 +72,174 @@ class _LogViewState extends State<LogView> {
     return "Selamat Malam";
   }
 
-  // ===== DIALOG TAMBAH CATATAN BARU =====
   void _showAddLogDialog() {
+    // Reset nilai dropdown ke default setiap kali dialog dibuka
+    String selectedCategory = 'Pribadi';
+
     showDialog(
-      // context = informasi lokasi widget di "pohon widget"
-      // builder = fungsi yang membangun widget dialog
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Tambah Catatan Baru"),
-        content: Column(
-          // mainAxisSize: MainAxisSize.min = Column hanya setinggi kontennya
-          // tanpa ini, Column akan memenuhi seluruh tinggi dialog
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _titleController,
-              decoration: const InputDecoration(hintText: "Judul Catatan"),
-            ),
-            TextField(
-              controller: _contentController,
-              decoration: const InputDecoration(hintText: "Isi Deskripsi"),
-            ),
-          ],
-        ),
-        actions: [
-          // Tombol Batal — tutup dialog tanpa simpan
-          TextButton(
-            // Navigator.pop(context) = tutup halaman/dialog paling atas
-            // Bayangkan tumpukan kartu: pop = angkat kartu paling atas
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Batal"),
-          ),
-          // Tombol Simpan — simpan data lalu tutup dialog
-          ElevatedButton(
-            onPressed: () {
-              // Panggil addLog di Controller
-              _controller.addLog(
-                _titleController.text,
-                _contentController.text,
-              );
-
-
-              // Bersihkan input field
-              _titleController.clear();
-              _contentController.clear();
-
-              // Tutup dialog
-              Navigator.pop(context);
-            },
-            child: const Text("Simpan"),
-          ),
-        ],
-      ),
+      builder: (context) {
+        // StatefulBuilder memungkinkan setState() di DALAM dialog
+        // Tanpa ini, dropdown tidak akan berubah saat user pilih opsi
+        // karena dialog punya context sendiri yang terpisah dari parent
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text("Tambah Catatan Baru"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: _titleController,
+                    decoration: const InputDecoration(
+                      hintText: "Judul Catatan",
+                    ),
+                  ),
+                  TextField(
+                    controller: _contentController,
+                    decoration: const InputDecoration(
+                      hintText: "Isi Deskripsi",
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // ===== DROPDOWN KATEGORI =====
+                  DropdownButtonFormField<String>(
+                    value: selectedCategory,
+                    decoration: const InputDecoration(
+                      labelText: "Kategori",
+                      border: OutlineInputBorder(),
+                    ),
+                    items: _categories.map((String category) {
+                      return DropdownMenuItem<String>(
+                        value: category,
+                        child: Row(
+                          children: [
+                            Icon(
+                              _getCategoryIcon(category),
+                              color: _getCategoryIconColor(category),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(category),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (String? newValue) {
+                      // setDialogState agar dropdown menampilkan pilihan baru
+                      setDialogState(() {
+                        selectedCategory = newValue!;
+                      });
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Batal"),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    _controller.addLog(
+                      _titleController.text,
+                      _contentController.text,
+                      category: selectedCategory,
+                    );
+                    _titleController.clear();
+                    _contentController.clear();
+                    Navigator.pop(context);
+                  },
+                  child: const Text("Simpan"),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
-  // ===== DIALOG EDIT CATATAN =====
   void _showEditLogDialog(int index, LogModel log) {
-    // Pre-fill: isi TextField dengan data yang sudah ada
-    // Sehingga user bisa melihat & mengedit data lama
     _titleController.text = log.title;
     _contentController.text = log.description;
+    // Pre-fill dropdown dengan kategori yang sudah ada
+    String selectedCategory = log.category;
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Edit Catatan"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: _titleController),
-            TextField(controller: _contentController),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Batal"),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              // Panggil updateLog di Controller
-              _controller.updateLog(
-                index,
-                _titleController.text,
-                _contentController.text,
-              );
-
-              // Bersihkan input
-              _titleController.clear();
-              _contentController.clear();
-
-              Navigator.pop(context);
-            },
-            child: const Text("Update"),
-          ),
-        ],
-      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text("Edit Catatan"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(controller: _titleController),
+                  TextField(controller: _contentController),
+                  const SizedBox(height: 12),
+                  // ===== DROPDOWN KATEGORI (pre-filled) =====
+                  DropdownButtonFormField<String>(
+                    value: selectedCategory,
+                    decoration: const InputDecoration(
+                      labelText: "Kategori",
+                      border: OutlineInputBorder(),
+                    ),
+                    items: _categories.map((String category) {
+                      return DropdownMenuItem<String>(
+                        value: category,
+                        child: Row(
+                          children: [
+                            Icon(
+                              _getCategoryIcon(category),
+                              color: _getCategoryIconColor(category),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(category),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (String? newValue) {
+                      setDialogState(() {
+                        selectedCategory = newValue!;
+                      });
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Batal"),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    _controller.updateLog(
+                      index,
+                      _titleController.text,
+                      _contentController.text,
+                      category: selectedCategory,
+                    );
+                    _titleController.clear();
+                    _contentController.clear();
+                    Navigator.pop(context);
+                  },
+                  child: const Text("Update"),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // ===== APP BAR =====
       appBar: AppBar(
         title: Text("Logbook: ${widget.username}"),
         titleTextStyle: const TextStyle(
@@ -149,9 +254,6 @@ class _LogViewState extends State<LogView> {
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.white),
             onPressed: () {
-              // pushReplacement = ganti halaman saat ini dengan halaman baru
-              // Bedanya dengan push: halaman lama DIHAPUS dari stack
-              // Jadi user tidak bisa tekan tombol back untuk kembali
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(builder: (_) => const OnboardingView()),
@@ -162,71 +264,230 @@ class _LogViewState extends State<LogView> {
       ),
 
       // ===== BODY =====
-      // ValueListenableBuilder = widget yang OTOMATIS rebuild saat
-      // ValueNotifier yang didengarkannya berubah nilainya
-      // Tidak perlu setState() — ini yang dimaksud "reactive"
-      body: ValueListenableBuilder<List<LogModel>>(
-        // valueListenable = notifier yang mau didengarkan
-        valueListenable: _controller.logsNotifier,
-
-        // builder dipanggil SETIAP KALI logsNotifier berubah
-        // context = lokasi widget
-        // currentLogs = nilai terbaru dari logsNotifier
-        // child = widget statis (optimasi, tidak kita pakai di sini)
-        builder: (context, currentLogs, child) {
-          // Tampilkan pesan jika belum ada catatan
-          if (currentLogs.isEmpty) {
-            return const Center(child: Text("Belum ada catatan."));
-          }
-
-          // ListView.builder = membuat list secara LAZY
-          // Hanya widget yang terlihat di layar yang dibangun
-          // Efisien untuk data banyak
-          return ListView.builder(
-            // itemCount = jumlah total item di list
-            itemCount: currentLogs.length,
-
-            // itemBuilder = fungsi yang membangun SETIAP item
-            // Dipanggil untuk setiap index (0, 1, 2, ...)
-            itemBuilder: (context, index) {
-              final log = currentLogs[index];
-
-              return Card(
-                child: ListTile(
-                  // leading = widget di sisi KIRI
-                  leading: const Icon(Icons.note),
-
-                  // title = teks utama
-                  title: Text(log.title),
-
-                  // subtitle = teks sekunder (di bawah title)
-                  subtitle: Text(log.description),
-
-                  // trailing = widget di sisi KANAN
-                  // Wrap = seperti Row tapi bisa wrap ke baris baru jika penuh
-                  trailing: Wrap(
-                    children: [
-                      // Tombol Edit
-                      IconButton(
-                        icon: const Icon(Icons.edit, color: Colors.blue),
-                        onPressed: () => _showEditLogDialog(index, log),
-                      ),
-                      // Tombol Delete
-                      IconButton(
-                        icon: const Icon(Icons.delete, color: Colors.red),
-                        onPressed: () => _controller.removeLog(index),
-                      ),
-                    ],
-                  ),
+      body: Column(
+        children: [
+          // ===== GREETING =====
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                "${_getGreeting()}, ${widget.username}!",
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
                 ),
-              );
-            },
-          );
-        },
+              ),
+            ),
+          ),
+
+          // ===== BARU: SEARCH FIELD =====
+          Padding(
+            // fromLTRB = from Left, Top, Right, Bottom
+            // Mengatur jarak dari setiap sisi secara terpisah
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: TextField(
+              controller: _searchController,
+
+              // onChanged dipanggil SETIAP KALI teks berubah (setiap ketukan)
+              // Inilah yang membuat pencarian "real-time"
+              // value = teks terbaru yang diketik user
+              onChanged: (value) {
+                _controller.searchLogs(value);
+              },
+
+              decoration: InputDecoration(
+                hintText: "Cari catatan berdasarkan judul...",
+
+                // prefixIcon = icon di AWAL (kiri) TextField
+                prefixIcon: const Icon(Icons.search),
+
+                // suffixIcon = icon di AKHIR (kanan) TextField
+                // Tombol X untuk menghapus teks pencarian
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: () {
+                    // Kosongkan search field
+                    _searchController.clear();
+                    // Tampilkan semua catatan kembali
+                    _controller.searchLogs('');
+                  },
+                ),
+
+                // border = garis tepi TextField
+                // OutlineInputBorder = border berbentuk kotak dengan sudut bulat
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+
+                // contentPadding = jarak antara teks dan border
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+              ),
+            ),
+          ),
+
+          // ===== LIST CATATAN =====
+          // Expanded = mengambil SEMUA sisa ruang yang tersedia
+          // Tanpa Expanded, ListView tidak tahu batasnya dan akan error
+          Expanded(
+            child: ValueListenableBuilder<List<LogModel>>(
+              valueListenable: _controller.logsNotifier,
+              builder: (context, currentLogs, child) {
+                if (currentLogs.isEmpty) {
+                  // ===== EMPTY STATE: Ilustrasi menarik saat list kosong =====
+                  final bool isSearching = _searchController.text.isNotEmpty;
+
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32.0),
+                      child: Column(
+                        // MainAxisAlignment.center = posisikan children di TENGAH vertikal
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // --- Icon besar sebagai ilustrasi ---
+                          Icon(
+                            isSearching
+                                ? Icons.search_off_rounded
+                                : Icons.menu_book_rounded,
+                            size: 100,
+                            color: Colors.grey.shade300,
+                          ),
+
+                          const SizedBox(height: 24),
+
+                          // --- Judul pesan ---
+                          Text(
+                            isSearching
+                                ? "Catatan tidak ditemukan"
+                                : "Belum ada catatan",
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+
+                          const SizedBox(height: 8),
+
+                          // --- Deskripsi/sub-judul ---
+                          Text(
+                            isSearching
+                                ? "Tidak ada catatan dengan judul \"${_searchController.text}\""
+                                : "Mulai catat aktivitas harianmu!\nTekan tombol + di bawah untuk memulai.",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey.shade400,
+                            ),
+                          ),
+
+                          // --- Tombol ajakan (hanya muncul jika BUKAN sedang search) ---
+                          if (!isSearching) ...[
+                            const SizedBox(height: 24),
+                            ElevatedButton.icon(
+                              onPressed: _showAddLogDialog,
+                              icon: const Icon(Icons.add),
+                              label: const Text("Tambah Catatan Pertama"),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color.fromARGB(
+                                  255,
+                                  77,
+                                  80,
+                                  255,
+                                ),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 24,
+                                  vertical: 12,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  );
+                }
+
+                return ListView.builder(
+                  itemCount: currentLogs.length,
+                  itemBuilder: (context, index) {
+                    final log = currentLogs[index];
+                    return Card(
+                      // ===== WARNA KARTU BERDASARKAN KATEGORI =====
+                      color: _getCategoryColor(log.category),
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
+                      child: ListTile(
+                        // ===== ICON BERDASARKAN KATEGORI =====
+                        leading: CircleAvatar(
+                          backgroundColor: _getCategoryIconColor(
+                            log.category,
+                          ).withOpacity(0.2),
+                          child: Icon(
+                            _getCategoryIcon(log.category),
+                            color: _getCategoryIconColor(log.category),
+                          ),
+                        ),
+                        title: Text(log.title),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(log.description),
+                            const SizedBox(height: 4),
+                            // ===== CHIP KATEGORI =====
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: _getCategoryIconColor(
+                                  log.category,
+                                ).withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                log.category,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: _getCategoryIconColor(log.category),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        trailing: Wrap(
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.edit, color: Colors.blue),
+                              onPressed: () => _showEditLogDialog(index, log),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete, color: Colors.red),
+                              onPressed: () => _controller.removeLog(index),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
       ),
 
-      // ===== FLOATING ACTION BUTTON =====
-      // Tombol mengambang di pojok kanan bawah
       floatingActionButton: FloatingActionButton(
         onPressed: _showAddLogDialog,
         child: const Icon(Icons.add),

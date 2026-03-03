@@ -43,91 +43,104 @@ class LogController {
   // Key untuk SharedPreferences (seperti label pada laci penyimpanan)
   static const String _storageKey = 'user_logs_data';
 
+  List<LogModel> _allLogs =
+      []; // List utama untuk menyimpan semua catatan (tanpa filter)
+
+  String _currentSearchKeyword = ''; // Kata kunci pencarian saat ini
+
   // Constructor — dipanggil saat LogController pertama kali dibuat
   // Langsung load data dari disk agar catatan lama muncul
   LogController() {
     loadFromDisk();
   }
 
+  void searchLogs(String keyword) {
+    _currentSearchKeyword = keyword.toLowerCase();
+
+    if (_currentSearchKeyword.isEmpty) {
+      // Jika kata kunci kosong, tampilkan semua catatan
+      logsNotifier.value = List<LogModel>.from(_allLogs);
+    } else {
+      // Filter catatan berdasarkan kata kunci (cari di title dan description)
+      logsNotifier.value = _allLogs.where((log) {
+        return log.title.toLowerCase().contains(_currentSearchKeyword) ||
+            log.description.toLowerCase().contains(_currentSearchKeyword);
+      }).toList();
+    }
+  }
+
+  void _refreshDisplay() {
+    searchLogs(_currentSearchKeyword);
+  }
+
   // ===== CREATE: Tambah catatan baru =====
-  void addLog(String title, String desc) {
+  void addLog(String title, String desc, {String category = 'Pribadi'}) {
     // Buat object LogModel baru
     // DateTime.now().toString() → contoh: "2026-02-24 14:30:00.000"
     final newLog = LogModel(
       title: title,
       description: desc,
       date: DateTime.now().toString(),
+      category: category,
     );
 
-    // Buat list BARU dengan spread operator
-    // Kenapa list baru? Karena ValueNotifier hanya tahu ada perubahan
-    // jika REFERENCE berubah (ditunjuk ke object baru)
-    // [...listLama, itemBaru] = ambil semua isi list lama + tambah item baru
-    logsNotifier.value = [...logsNotifier.value, newLog];
-
-    // Simpan ke storage setiap ada perubahan
-    saveToDisk();
+    _allLogs.add(newLog); // Simpan ke list utama
+    _refreshDisplay(); // Refresh tampilan berdasarkan kata kunci saat ini
+    saveToDisk(); // Simpan ke storage setiap ada perubahan
   }
 
   // ===== UPDATE: Edit catatan berdasarkan index =====
-  void updateLog(int index, String title, String desc) {
-    // Buat SALINAN list (bukan reference ke list yang sama)
-    final currentLogs = List<LogModel>.from(logsNotifier.value);
+  void updateLog(
+    int displayIndex,
+    String title,
+    String desc, {
+    String category = 'Pribadi',
+  }) {
+    final displayedLog = logsNotifier.value[displayIndex];
+    final actualIndex = _allLogs.indexOf(displayedLog);
 
-    // Ganti item di posisi index dengan LogModel baru
-    currentLogs[index] = LogModel(
-      title: title,
-      description: desc,
-      date: DateTime.now().toString(),
-    );
-
-    // Assign list baru → ValueNotifier mendeteksi perubahan → UI rebuild
-    logsNotifier.value = currentLogs;
-    saveToDisk();
+    if (actualIndex != -1) {
+      _allLogs[actualIndex] = LogModel(
+        title: title,
+        description: desc,
+        date: DateTime.now().toString(),
+        category: category,
+      );
+      _refreshDisplay();
+      saveToDisk();
+    }
   }
 
   // ===== DELETE: Hapus catatan berdasarkan index =====
-  void removeLog(int index) {
-    final currentLogs = List<LogModel>.from(logsNotifier.value);
-    // removeAt = hapus item di posisi tertentu
-    // Misal list = [A, B, C], removeAt(1) → [A, C]
-    currentLogs.removeAt(index);
-    logsNotifier.value = currentLogs;
+  void removeLog(int displayIndex) {
+    final displayedLog = logsNotifier.value[displayIndex];
+    _allLogs.remove(displayedLog);
+    _refreshDisplay();
     saveToDisk();
   }
 
   // ===== SAVE: Encoding Object → JSON → SharedPreferences =====
   // Future = operasi yang butuh waktu (async), hasilnya datang nanti
   // async/await = "tunggu sampai operasi ini selesai"
+  // ===== SAVE =====
   Future<void> saveToDisk() async {
-    // 1. Dapatkan instance SharedPreferences
     final prefs = await SharedPreferences.getInstance();
-
-    // 2. Ubah List<LogModel> → List<Map> → JSON String
-    //    .map((e) => e.toMap()) = setiap LogModel diubah jadi Map
-    //    .toList() = hasil map (Iterable) dijadikan List
-    //    jsonEncode() = List<Map> dijadikan JSON String
+    // Simpan _allLogs (list LENGKAP), bukan logsNotifier (yang mungkin terfilter)
     final String encodedData = jsonEncode(
-      logsNotifier.value.map((e) => e.toMap()).toList(),
+      _allLogs.map((e) => e.toMap()).toList(),
     );
-
-    // 3. Simpan JSON String ke SharedPreferences dengan key tertentu
     await prefs.setString(_storageKey, encodedData);
   }
 
-  // ===== LOAD: SharedPreferences → JSON → Decoding ke Object =====
+  // ===== LOAD =====
   Future<void> loadFromDisk() async {
     final prefs = await SharedPreferences.getInstance();
-
-    // Baca string dari storage (bisa null jika belum pernah simpan)
     final String? data = prefs.getString(_storageKey);
-
     if (data != null) {
-      // 1. jsonDecode() = JSON String → List<dynamic>
       final List decoded = jsonDecode(data);
-
-      // 2. .map((e) => LogModel.fromMap(e)) = setiap Map diubah jadi LogModel
-      logsNotifier.value = decoded.map((e) => LogModel.fromMap(e)).toList();
+      _allLogs = decoded.map((e) => LogModel.fromMap(e)).toList();
+      // Tampilkan semua catatan saat pertama kali load
+      logsNotifier.value = List.from(_allLogs);
     }
   }
 }
