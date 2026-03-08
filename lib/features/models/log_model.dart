@@ -17,8 +17,20 @@ class LogModel {
 
   // [REVERT] Membongkar "Kardus" (BSON/Map) dari Cloud
   factory LogModel.fromMap(Map<String, dynamic> map) {
+    ObjectId? parseId;
+    final rawId = map['_id'];
+    if (rawId is ObjectId) {
+      parseId = rawId;
+    } else if (rawId is String) {
+      try {
+        parseId = ObjectId.fromHexString(rawId);
+      } catch (e) {
+        parseId = null; // Jika parsing gagal, biarkan parseId tetap null
+      }
+    }
+
     return LogModel(
-      id: map['_id'] as ObjectId?, // Menarik ID dari database
+      id: parseId, // Menarik ID dari database
       title: map['title'] ?? '',
       date: map['date'] ?? '',
       description: map['description'] ?? '',

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:logbook_app_082/features/logbook/log_controller.dart';
 import 'package:logbook_app_082/features/models/log_model.dart';
 import 'package:logbook_app_082/features/onboarding/onboarding_view.dart';
+import 'package:intl/intl.dart';
 import 'package:logbook_app_082/services/mongo_service.dart';
 import 'package:logbook_app_082/helpers/log_helper.dart';
 
@@ -20,6 +21,7 @@ class _LogViewState extends State<LogView> {
   // FutureBuilder membutuhkan Future yang di-track untuk menentukan state (waiting/done/error)
   // Kita simpan Future dari _initDatabase() agar FutureBuilder bisa memantau prosesnya
   late Future<void> _initFuture;
+  bool _isOffline = false; // Connection Guard: true saat koneksi gagal
 
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _contentController = TextEditingController();
@@ -37,53 +39,92 @@ class _LogViewState extends State<LogView> {
     _initFuture = _initDatabase();
   }
 
-  /// Inisialisasi koneksi database dan muat data dari Cloud
-  /// Dipanggil oleh FutureBuilder — TIDAK perlu setState manual
+  /// ===== CONNECTION GUARD =====
+  /// Inisialisasi koneksi + muat data. Jika gagal → Offline Mode (bukan crash).
   Future<void> _initDatabase() async {
     await LogHelper.writeLog(
       "UI: Memulai inisialisasi database...",
       source: "log_view.dart",
     );
 
-    // Mencoba koneksi ke MongoDB Atlas (Cloud)
-    await LogHelper.writeLog(
-      "UI: Menghubungi MongoService.connect()...",
-      source: "log_view.dart",
-    );
+    try {
+      // Mencoba koneksi ke MongoDB Atlas (Cloud)
+      await MongoService().connect().timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => throw Exception(
+          "Koneksi Cloud Timeout. Periksa sinyal/IP Whitelist.",
+        ),
+      );
 
-    // Timeout 15 detik agar toleran terhadap jaringan seluler
-    await MongoService().connect().timeout(
-      const Duration(seconds: 15),
-      onTimeout: () => throw Exception(
-        "Koneksi Cloud Timeout. Periksa sinyal/IP Whitelist.",
-      ),
-    );
+      await LogHelper.writeLog(
+        "UI: Koneksi MongoService BERHASIL.",
+        source: "log_view.dart",
+      );
 
-    await LogHelper.writeLog(
-      "UI: Koneksi MongoService BERHASIL.",
-      source: "log_view.dart",
-    );
+      // Ambil data dari Cloud
+      await _controller.loadFromCloud();
+      _isOffline = false;
 
-    // ===== TASK 3: FutureBuilder — Ambil data dari Cloud via getLogs() =====
-    await LogHelper.writeLog(
-      "UI: Memanggil loadFromCloud() via FutureBuilder...",
-      source: "log_view.dart",
-    );
+      await LogHelper.writeLog(
+        "UI: Data berhasil dimuat dari Cloud.",
+        source: "log_view.dart",
+      );
+    } catch (e) {
+      // CONNECTION GUARD: Jangan crash — fallback ke Offline Mode
+      await LogHelper.writeLog(
+        "UI: Koneksi gagal, masuk Offline Mode - $e",
+        source: "log_view.dart",
+        level: 1,
+      );
+      _isOffline = true;
+      await _controller.loadFromDisk();
 
-    await _controller.loadFromCloud();
-
-    await LogHelper.writeLog(
-      "UI: Data berhasil dimuat ke Notifier.",
-      source: "log_view.dart",
-    );
+      await LogHelper.writeLog(
+        "UI: Data dimuat dari cache lokal (Offline Mode).",
+        source: "log_view.dart",
+      );
+    }
   }
 
-  /// TASK 3: Refresh data — rebuild FutureBuilder dari awal
-  /// Dipanggil setelah CRUD agar data otomatis ter-refresh dari Atlas
+  /// Refresh data — rebuild FutureBuilder dari awal
   void _refreshData() {
     setState(() {
+      _isOffline = false;
       _initFuture = _initDatabase();
     });
+  }
+
+  /// ===== PULL-TO-REFRESH =====
+  /// Dipanggil saat user menarik layar ke bawah (RefreshIndicator)
+  /// Tidak rebuild FutureBuilder — hanya refresh data di background
+  Future<void> _handlePullRefresh() async {
+    try {
+      await MongoService().connect().timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => throw Exception("Timeout"),
+      );
+      await _controller.loadFromCloud();
+      if (mounted) setState(() => _isOffline = false);
+    } catch (e) {
+      await LogHelper.writeLog(
+        "UI: Pull-to-refresh gagal - $e",
+        source: "log_view.dart",
+        level: 1,
+      );
+      if (mounted) {
+        setState(() => _isOffline = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text("Gagal memuat dari Cloud. Mode Offline aktif."),
+            backgroundColor: Colors.orange.shade700,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+        );
+      }
+    }
   }
 
   // ===== BARU: Daftar kategori yang tersedia =====
@@ -139,37 +180,57 @@ class _LogViewState extends State<LogView> {
     return "Selamat Malam";
   }
 
-  // ===== BARU: Format tanggal agar lebih rapi =====
-  // Dari: "2026-03-03 14:30:00.000" → Menjadi: "03 Mar 2026, 14:30"
+  // ===== TIMESTAMP FORMATTING: Relatif + Absolut (Indonesia) =====
+  // Menggunakan library intl (DateFormat) untuk format waktu lokal Indonesia
+  // Contoh: "Baru saja", "2 menit yang lalu", "25 Jan 2026, 14:30"
   String _formatDate(String dateString) {
     try {
       final date = DateTime.parse(dateString);
-      // Daftar nama bulan dalam bahasa Indonesia (disingkat)
-      const months = [
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'Mei',
-        'Jun',
-        'Jul',
-        'Agu',
-        'Sep',
-        'Okt',
-        'Nov',
-        'Des',
-      ];
-      final day = date.day.toString().padLeft(2, '0');
-      final month =
-          months[date.month - 1]; // month dimulai dari 1, index dari 0
-      final year = date.year;
-      final hour = date.hour.toString().padLeft(2, '0');
-      final minute = date.minute.toString().padLeft(2, '0');
-      return '$day $month $year, $hour:$minute';
+      final now = DateTime.now();
+      final difference = now.difference(date);
+
+      // Format RELATIF untuk waktu yang "dekat" — gaya Indonesia
+      if (difference.isNegative) {
+        return DateFormat('d MMM yyyy, HH:mm').format(date);
+      }
+      if (difference.inSeconds < 60) return "Baru saja";
+      if (difference.inMinutes < 60) {
+        return "${difference.inMinutes} menit yang lalu";
+      }
+      if (difference.inHours < 24) {
+        return "${difference.inHours} jam yang lalu";
+      }
+      if (difference.inDays < 7) {
+        return "${difference.inDays} hari yang lalu";
+      }
+
+      // Format ABSOLUT untuk waktu > 7 hari — menggunakan library intl
+      return DateFormat('d MMM yyyy, HH:mm').format(date);
     } catch (e) {
-      // Jika format date tidak bisa di-parse, kembalikan apa adanya
       return dateString;
     }
+  }
+
+  // ===== CONNECTION GUARD: Widget Banner untuk Offline Mode =====
+  Widget _buildOfflineBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      color: Colors.orange.shade100,
+      child: Row(
+        children: [
+          Icon(Icons.wifi_off, color: Colors.orange.shade800, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              "Offline Mode — Menampilkan data dari cache lokal. "
+              "Tarik ke bawah untuk mencoba koneksi ulang.",
+              style: TextStyle(color: Colors.orange.shade900, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showAddLogDialog() {
@@ -423,19 +484,27 @@ class _LogViewState extends State<LogView> {
           return ValueListenableBuilder<List<LogModel>>(
             valueListenable: _controller.logsNotifier,
             builder: (context, currentLogs, child) {
-              // 3a. Data Kosong — tampilkan pesan "Data Kosong"
+              // 3a. Data Kosong — dengan Pull-to-Refresh + Connection Guard
               if (currentLogs.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
+                return RefreshIndicator(
+                  onRefresh: _handlePullRefresh,
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
                     children: [
+                      // Connection Guard: Banner offline jika koneksi gagal
+                      if (_isOffline) _buildOfflineBanner(),
+                      SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.25,
+                      ),
                       const Icon(Icons.cloud_off, size: 64, color: Colors.grey),
                       const SizedBox(height: 16),
-                      const Text("Data Kosong"),
+                      const Center(child: Text("Data Kosong")),
                       const SizedBox(height: 8),
-                      ElevatedButton(
-                        onPressed: _showAddLogDialog,
-                        child: const Text("Buat Catatan Pertama"),
+                      Center(
+                        child: ElevatedButton(
+                          onPressed: _showAddLogDialog,
+                          child: const Text("Buat Catatan Pertama"),
+                        ),
                       ),
                     ],
                   ),
@@ -445,6 +514,9 @@ class _LogViewState extends State<LogView> {
               // 3b. Data ada — tampilkan List
               return Column(
                 children: [
+                  // ===== CONNECTION GUARD: Banner Offline Mode =====
+                  if (_isOffline) _buildOfflineBanner(),
+
                   // ===== GREETING =====
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -489,252 +561,259 @@ class _LogViewState extends State<LogView> {
                     ),
                   ),
 
-                  // ===== LIST CATATAN =====
+                  // ===== LIST CATATAN + PULL-TO-REFRESH =====
                   Expanded(
-                    child: ListView.builder(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      itemCount: currentLogs.length,
-                      itemBuilder: (context, index) {
-                        final log = currentLogs[index];
+                    child: RefreshIndicator(
+                      onRefresh: _handlePullRefresh,
+                      child: ListView.builder(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        itemCount: currentLogs.length,
+                        itemBuilder: (context, index) {
+                          final log = currentLogs[index];
 
-                        return Dismissible(
-                          key: ValueKey('${log.title}_${log.date}'),
-                          direction: DismissDirection.endToStart,
-                          background: Container(
-                            margin: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.red.shade400,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            alignment: Alignment.centerRight,
-                            padding: const EdgeInsets.only(right: 24),
-                            child: const Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                Icon(
-                                  Icons.delete_forever,
-                                  color: Colors.white,
-                                  size: 28,
-                                ),
-                                SizedBox(width: 8),
-                                Text(
-                                  "Hapus",
-                                  style: TextStyle(
+                          return Dismissible(
+                            key: ValueKey('${log.title}_${log.date}'),
+                            direction: DismissDirection.endToStart,
+                            background: Container(
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.red.shade400,
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              alignment: Alignment.centerRight,
+                              padding: const EdgeInsets.only(right: 24),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  Icon(
+                                    Icons.delete_forever,
                                     color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
+                                    size: 28,
                                   ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          confirmDismiss: (direction) async {
-                            return await showDialog<bool>(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                title: const Text("Hapus Catatan"),
-                                content: Text(
-                                  "Yakin ingin menghapus \"${log.title}\"?",
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.pop(context, false),
-                                    child: const Text("Batal"),
-                                  ),
-                                  ElevatedButton(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.red,
-                                      foregroundColor: Colors.white,
+                                  SizedBox(width: 8),
+                                  Text(
+                                    "Hapus",
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
                                     ),
-                                    onPressed: () =>
-                                        Navigator.pop(context, true),
-                                    child: const Text("Hapus"),
                                   ),
                                 ],
                               ),
-                            );
-                          },
-                          onDismissed: (direction) async {
-                            await _controller.removeLog(index);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text("\"${log.title}\" telah dihapus"),
-                                behavior: SnackBarBehavior.floating,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
+                            ),
+                            confirmDismiss: (direction) async {
+                              return await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text("Hapus Catatan"),
+                                  content: Text(
+                                    "Yakin ingin menghapus \"${log.title}\"?",
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, false),
+                                      child: const Text("Batal"),
+                                    ),
+                                    ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.red,
+                                        foregroundColor: Colors.white,
+                                      ),
+                                      onPressed: () =>
+                                          Navigator.pop(context, true),
+                                      child: const Text("Hapus"),
+                                    ),
+                                  ],
                                 ),
-                                duration: const Duration(seconds: 2),
-                              ),
-                            );
-                          },
+                              );
+                            },
+                            onDismissed: (direction) async {
+                              await _controller.removeLog(index);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    "\"${log.title}\" telah dihapus",
+                                  ),
+                                  behavior: SnackBarBehavior.floating,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                            },
 
-                          // ===== CHILD: Card yang dipercantik =====
-                          child: Card(
-                            color: _getCategoryColor(log.category),
-                            margin: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 6,
-                            ),
-                            elevation: 2,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // --- Baris atas: Icon + Judul + Tombol Edit ---
-                                  Row(
-                                    children: [
-                                      CircleAvatar(
-                                        radius: 22,
-                                        backgroundColor: _getCategoryIconColor(
+                            // ===== CHILD: Card yang dipercantik =====
+                            child: Card(
+                              color: _getCategoryColor(log.category),
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 6,
+                              ),
+                              elevation: 2,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // --- Baris atas: Icon + Judul + Tombol Edit ---
+                                    Row(
+                                      children: [
+                                        CircleAvatar(
+                                          radius: 22,
+                                          backgroundColor:
+                                              _getCategoryIconColor(
+                                                log.category,
+                                              ).withOpacity(0.15),
+                                          child: Icon(
+                                            _getCategoryIcon(log.category),
+                                            color: _getCategoryIconColor(
+                                              log.category,
+                                            ),
+                                            size: 22,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                log.title,
+                                                style: const TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                _formatDate(log.date),
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.grey.shade500,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        IconButton(
+                                          icon: Icon(
+                                            Icons.edit_outlined,
+                                            color: Colors.grey.shade400,
+                                            size: 20,
+                                          ),
+                                          onPressed: () =>
+                                              _showEditLogDialog(index, log),
+                                        ),
+                                      ],
+                                    ),
+
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 10,
+                                      ),
+                                      child: Divider(
+                                        height: 1,
+                                        color: _getCategoryIconColor(
                                           log.category,
                                         ).withOpacity(0.15),
-                                        child: Icon(
-                                          _getCategoryIcon(log.category),
-                                          color: _getCategoryIconColor(
-                                            log.category,
+                                      ),
+                                    ),
+
+                                    Text(
+                                      log.description,
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey.shade700,
+                                        height: 1.4,
+                                      ),
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+
+                                    const SizedBox(height: 10),
+
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 4,
                                           ),
-                                          size: 22,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              log.title,
-                                              style: const TextStyle(
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              _formatDate(log.date),
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey.shade500,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      IconButton(
-                                        icon: Icon(
-                                          Icons.edit_outlined,
-                                          color: Colors.grey.shade400,
-                                          size: 20,
-                                        ),
-                                        onPressed: () =>
-                                            _showEditLogDialog(index, log),
-                                      ),
-                                    ],
-                                  ),
-
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 10,
-                                    ),
-                                    child: Divider(
-                                      height: 1,
-                                      color: _getCategoryIconColor(
-                                        log.category,
-                                      ).withOpacity(0.15),
-                                    ),
-                                  ),
-
-                                  Text(
-                                    log.description,
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.grey.shade700,
-                                      height: 1.4,
-                                    ),
-                                    maxLines: 3,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-
-                                  const SizedBox(height: 10),
-
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: _getCategoryIconColor(
-                                            log.category,
-                                          ).withOpacity(0.12),
-                                          borderRadius: BorderRadius.circular(
-                                            20,
-                                          ),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(
-                                              _getCategoryIcon(log.category),
-                                              size: 14,
-                                              color: _getCategoryIconColor(
-                                                log.category,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 4),
-                                            Text(
+                                          decoration: BoxDecoration(
+                                            color: _getCategoryIconColor(
                                               log.category,
-                                              style: TextStyle(
-                                                fontSize: 12,
+                                            ).withOpacity(0.12),
+                                            borderRadius: BorderRadius.circular(
+                                              20,
+                                            ),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                _getCategoryIcon(log.category),
+                                                size: 14,
                                                 color: _getCategoryIconColor(
                                                   log.category,
                                                 ),
-                                                fontWeight: FontWeight.w600,
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                log.category,
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: _getCategoryIconColor(
+                                                    log.category,
+                                                  ),
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.swipe_left_rounded,
+                                              size: 14,
+                                              color: Colors.grey.shade300,
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              "geser untuk hapus",
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: Colors.grey.shade300,
+                                                fontStyle: FontStyle.italic,
                                               ),
                                             ),
                                           ],
                                         ),
-                                      ),
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(
-                                            Icons.swipe_left_rounded,
-                                            size: 14,
-                                            color: Colors.grey.shade300,
-                                          ),
-                                          const SizedBox(width: 4),
-                                          Text(
-                                            "geser untuk hapus",
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              color: Colors.grey.shade300,
-                                              fontStyle: FontStyle.italic,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                      ],
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                        );
-                      },
+                          );
+                        },
+                      ),
                     ),
                   ),
                 ],
