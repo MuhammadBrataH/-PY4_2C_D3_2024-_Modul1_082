@@ -25,7 +25,7 @@ class _OnboardingViewState extends State<OnboardingView> {
     },
     {
       "image": "assets/images/onboarding3.jpeg",
-      "title": "Ayo Mulai!",
+      "title": "Mulai Sekarang!",
       "description":
           "Buat akun dan mulai mencatat aktivitas harian Anda sekarang juga!",
     },

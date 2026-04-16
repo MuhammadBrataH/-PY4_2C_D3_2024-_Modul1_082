@@ -31,21 +31,27 @@ class _LoginViewState extends State<LoginView> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text("Username dan Password tidak boleh kosong!"),
-          backgroundColor: Color( 0xFFE57373), // Warna merah untuk error
+          backgroundColor: Color(0xFFE57373), // Warna merah untuk error
         ),
       );
       return;
     }
 
-    bool isSuccess = _controller.login(user, pass);
+    // LoginController sekarang return Map<String, String>? (user object)
+    final userObj = _controller.login(user, pass);
 
-    if (isSuccess) {
+    if (userObj != null) {
       failedAttempts = 0; // Reset percobaan gagal jika login berhasil
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          // Di sini kita kirimkan variabel 'user' ke parameter 'username' di CounterView
-          builder: (context) => LogView(username: user),
+          // Kirimkan user object ke LogView
+          builder: (context) => LogView(
+            username: userObj['username'] ?? '',
+            role: userObj['role'] ?? '',
+            uid: userObj['uid'] ?? '',
+            teamId: userObj['teamId'] ?? '',
+          ),
         ),
       );
     } else {
@@ -61,7 +67,7 @@ class _LoginViewState extends State<LoginView> {
           const SnackBar(
             content: Text("Terlalu banyak percobaan gagal! Tunggu 10 detik."),
             backgroundColor: Color(0xFFE57373), // Warna merah untuk error
-          ),  
+          ),
         );
         Future.delayed(const Duration(seconds: 10), () {
           setState(() {
@@ -69,13 +75,14 @@ class _LoginViewState extends State<LoginView> {
             isLocked = false; // Buka kunci login
           });
         });
-      } else
+      } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text("Login Gagal! percobaan ke-$failedAttempts dari 3."),
             backgroundColor: const Color(0xFFE57373), // Warna merah untuk error
           ),
         );
+      }
     }
   }
 

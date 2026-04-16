@@ -1,51 +1,66 @@
-import 'package:mongo_dart/mongo_dart.dart';
+import 'package:hive/hive.dart';
+import 'package:mongo_dart/mongo_dart.dart' show ObjectId;
 
+part 'log_model.g.dart';
+
+@HiveType(typeId: 0)
 class LogModel {
-  final ObjectId? id; // Wajib untuk penanda unik di MongoDB
+  @HiveField(0)
+  final String? id;
+
+  @HiveField(1)
   final String title;
-  final String date;
+
+  @HiveField(2)
   final String description;
-  final String category;
+
+  @HiveField(3)
+  final String date;
+
+  @HiveField(4)
+  final String authorId; // BARU
+
+  @HiveField(5)
+  final String teamId; // BARU
+
+  @HiveField(6)
+  final bool isPublic;
+
+  @HiveField(7)
+  final String category; // BARU: Kategori log (misal: "Maintenance", "Incident", dll)
 
   LogModel({
-    this.id, // Jangan lupa tambahkan ini di constructor
+    this.id,
     required this.title,
-    required this.date,
     required this.description,
-    this.category = 'Pribadi',
+    required this.date,
+    required this.authorId,
+    required this.teamId,
+    this.isPublic = false,
+    this.category = "Software", // Default kategori, // Default: Private
   });
 
-  // [REVERT] Membongkar "Kardus" (BSON/Map) dari Cloud
+  Map<String, dynamic> toMap() => {
+    '_id': id != null ? ObjectId.fromHexString(id!) : ObjectId(),
+    'title': title,
+    'description': description,
+    'date': date,
+    'authorId': authorId,
+    'teamId': teamId,
+    'isPublic': isPublic,
+    'category': category,
+  };
+
   factory LogModel.fromMap(Map<String, dynamic> map) {
-    ObjectId? parseId;
-    final rawId = map['_id'];
-    if (rawId is ObjectId) {
-      parseId = rawId;
-    } else if (rawId is String) {
-      try {
-        parseId = ObjectId.fromHexString(rawId);
-      } catch (e) {
-        parseId = null; // Jika parsing gagal, biarkan parseId tetap null
-      }
-    }
-
     return LogModel(
-      id: parseId, // Menarik ID dari database
+      id: (map['_id'] as ObjectId?)?.oid,
       title: map['title'] ?? '',
-      date: map['date'] ?? '',
       description: map['description'] ?? '',
-      category: map['category'] ?? 'Pribadi',
+      date: map['date'] ?? '',
+      authorId: map['authorId'] ?? 'unknown_user', // Cegah error null
+      teamId: map['teamId'] ?? 'no_team',
+      isPublic: map['isPublic'] ?? false,
+      category: map['category'] ?? "Software",
     );
-  }
-
-  // [CONVERT] Memasukkan data ke "Kardus" (BSON/Map) untuk dikirim ke Cloud
-  Map<String, dynamic> toMap() {
-    return {
-      '_id': id ?? ObjectId(), // Buat ID otomatis jika data baru
-      'title': title,
-      'date': date,
-      'description': description,
-      'category': category,
-    };
   }
 }

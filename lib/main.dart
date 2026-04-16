@@ -42,6 +42,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 // Sesuaikan path import dengan struktur folder baru
 import 'package:logbook_app_082/features/onboarding/onboarding_view.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+import 'package:logbook_app_082/features/models/log_model.dart'; // Import LogModel + Adapter
 
 void main() async {
   // Wajib untuk operasi asinkron sebelum runApp
@@ -49,6 +51,12 @@ void main() async {
   // Load ENV
   await dotenv.load(fileName: ".env");
 
+  // INISIALISASI HIVE
+  await Hive.initFlutter();
+  Hive.registerAdapter(LogModelAdapter()); // WAJIB: Sesuai nama di .g.dart
+  await Hive.openBox<LogModel>(
+    'offline_logs',
+  ); // Buka box sebelum Controller dipakai
   runApp(const MyApp());
 }
 

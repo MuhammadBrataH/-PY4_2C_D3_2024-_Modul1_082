@@ -1,14 +1,31 @@
 // login_controller.dart
 class LoginController {
-  // Database sederhana (Hardcoded)
-  final Map<String, String> _users = {"admin": "123", "brata": "123"};
+  // Simulasi database user lengkap dengan role, uid, dan teamId
+  final List<Map<String, String>> _users = [
+    {
+      'username': 'admin',
+      'password': '123',
+      'role': 'Ketua',
+      'uid': 'u001',
+      'teamId': 'team_alpha',
+    },
+    {
+      'username': 'brata',
+      'password': '123',
+      'role': 'Anggota',
+      'uid': 'u002',
+      'teamId': 'team_alpha',
+    },
+  ];
 
-  // Fungsi pengecekan (Logic-Only)
-  // Fungsi ini mengembalikan true jika cocok, false jika salah.
-  bool login(String username, String password) {
-    if (_users.containsKey(username) && _users[username] == password) {
-      return _users[username] == password;
+  // Return Map user jika berhasil, null jika gagal
+  Map<String, String>? login(String username, String password) {
+    try {
+      return _users.firstWhere(
+        (u) => u['username'] == username && u['password'] == password,
+      );
+    } catch (_) {
+      return null;
     }
-    return false;
   }
 }
